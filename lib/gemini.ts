@@ -145,12 +145,22 @@ async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T | nu
   return null;
 }
 
-function buildFallbackQuestion(days: RankedDay[]): GeneratedQuestion {
+const FALLBACK_QUESTION_TEMPLATES = [
+  (obj: string) => `Walk me through how you would approach this task: "${obj}".`,
+  (obj: string) => `Can you describe your approach to: "${obj}"?`,
+  (obj: string) => `How would you handle the following: "${obj}"?`,
+  (obj: string) => `Tell me about your experience with: "${obj}".`,
+  (obj: string) => `What's your thought process for: "${obj}"?`,
+];
+
+function buildFallbackQuestion(days: RankedDay[], historyLength = 0): GeneratedQuestion {
   const top = days[0];
   const objective = top.objectives[0] ?? "the core concepts of this curriculum day";
+  const templateIndex = historyLength % FALLBACK_QUESTION_TEMPLATES.length;
+  const template = FALLBACK_QUESTION_TEMPLATES[templateIndex];
   return {
     day: top.day,
-    question: `Walk me through how you would approach this task: "${objective}".`,
+    question: template(objective),
     rationale: `Targeting Day ${top.day} (${top.title}) because it is the highest-priority area for this candidate.`,
   };
 }
@@ -216,7 +226,7 @@ export async function generateQuestion(
     return result;
   }, "generateQuestion");
 
-  return generated ?? buildFallbackQuestion(retrievedDays);
+  return generated ?? buildFallbackQuestion(retrievedDays, history.length);
 }
 
 const CLASSIFY_SYSTEM_PROMPT = `You are a strict technical interviewer grading a candidate's answer during a technical interview.

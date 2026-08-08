@@ -91,8 +91,14 @@ export function isDontKnowAnswer(text: string): boolean {
   const dontKnowPatterns = [
     /i don'?t know/,
     /i do not know/,
+    /i don'?t remember/,
+    /i do not remember/,
+    /i can'?t remember/,
+    /i cannot remember/,
     /\bidk\b/,
+    /\bdunno\b/,
     /\bnot sure\b/,
+    /\bunsure\b/,
     /i have no idea/,
     /\bno idea\b/,
     /don'?t know/,
@@ -101,8 +107,17 @@ export function isDontKnowAnswer(text: string): boolean {
     /i cannot answer/,
     /i can't answer/,
     /cannot answer/,
+    /can'?t answer/,
     /have no clue/,
-    /no clue/,
+    /\bno clue\b/,
+    /\bclueless\b/,
+    /\bbeats me\b/,
+    /you tell me/,
+    /\bsearch me\b/,
+    /i'?ve got nothing/,
+    /got nothing/,
+    /no idea how/,
+    /no idea what/,
   ];
   return dontKnowPatterns.some((pattern) => pattern.test(lowered));
 }

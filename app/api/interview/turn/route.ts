@@ -121,15 +121,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const hasPriorQuestion = questionsAsked > 0;
     let classification: ClassifyResult | null = null;
     const lastAnswer = lastCandidateTurn(history);
-    if (hasPriorQuestion && lastAnswer) {
+    const candidateSaysDontKnow = lastAnswer ? isDontKnowAnswer(lastAnswer.content) : false;
+    if (hasPriorQuestion && lastAnswer && !candidateSaysDontKnow) {
       const lastQuestion = lastInterviewerTurn(history);
       if (lastQuestion) {
         classification = await classifyAnswer(lastQuestion.content, lastAnswer.content);
       }
     }
-    const followUp = decideFollowUp(classification, history, hasPriorQuestion);
+    const followUp = decideFollowUp(classification, history, hasPriorQuestion) && !candidateSaysDontKnow;
 
-    const candidateSaysDontKnow = lastAnswer ? isDontKnowAnswer(lastAnswer.content) : false;
     const queryText =
       !hasPriorQuestion
         ? buildSeedQuery(profile)
