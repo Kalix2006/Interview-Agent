@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "embed:curriculum": "node --env-file-if-exists=.env scripts/embed-curriculum.ts"
+    "embed:curriculum": "node --env-file-if-exists=.env scripts/embed-curriculum.ts",
+    "sanity:retrieval": "node --env-file-if-exists=.env scripts/sanity-check-retrieval.ts"
   },
   "dependencies": {
     "next": "14.2.35",
