@@ -61,6 +61,14 @@ check("weak answer on opener -> follow-up", decideFollowUp(weak, oneQ, true) ===
 check("weak answer after one follow-up -> still allowed", decideFollowUp(weak, twoSameDay, true) === true);
 check("weak answer after two follow-ups -> new topic", decideFollowUp(weak, [tagged(10, "Q1"), answer("A1"), tagged(10, "Q2"), answer("A2"), tagged(10, "Q3"), answer("A3")], true) === false);
 
+check("\"I don't know\" -> no follow-up", decideFollowUp(weak, [tagged(10, "Q1"), answer("I don't know")], true) === false);
+check("\"IDK\" -> no follow-up", decideFollowUp(weak, [tagged(10, "Q1"), answer("IDK")], true) === false);
+check("\"Not sure\" -> no follow-up", decideFollowUp(weak, [tagged(10, "Q1"), answer("Not sure")], true) === false);
+check("\"Pass\" -> no follow-up", decideFollowUp(weak, [tagged(10, "Q1"), answer("Pass")], true) === false);
+check("\"Skip\" -> no follow-up", decideFollowUp(weak, [tagged(10, "Q1"), answer("Skip")], true) === false);
+check("case-insensitive don't know", decideFollowUp(weak, [tagged(10, "Q1"), answer("I DON'T KNOW")], true) === false);
+check("normal weak answer still triggers follow-up", decideFollowUp(weak, [tagged(10, "Q1"), answer("I think maybe it uses vectors")], true) === true);
+
 const profile = {
   member: { id: "X", name: "X", jobRole: "ML Engineer", yearsExperience: 3, education: "", status: "COMPLETED" },
   missions: [

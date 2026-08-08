@@ -78,10 +78,33 @@ export function decideFollowUp(
   hasPriorQuestion: boolean
 ): boolean {
   if (!hasPriorQuestion || !classification) return false;
+  const lastAnswer = lastCandidateTurn(history);
+  if (lastAnswer && isDontKnowAnswer(lastAnswer.content)) return false;
   const weak =
     classification.depth === "shallow" || classification.hedging || classification.accuracy === "low";
   if (!weak) return false;
   return trailingSameDayCount(history) < MAX_FOLLOW_UPS_PER_DAY + 1;
+}
+
+export function isDontKnowAnswer(text: string): boolean {
+  const lowered = text.trim().toLowerCase();
+  const dontKnowPatterns = [
+    /i don'?t know/,
+    /i do not know/,
+    /\bidk\b/,
+    /\bnot sure\b/,
+    /i have no idea/,
+    /\bno idea\b/,
+    /don'?t know/,
+    /\bpass\b/,
+    /\bskip\b/,
+    /i cannot answer/,
+    /i can't answer/,
+    /cannot answer/,
+    /have no clue/,
+    /no clue/,
+  ];
+  return dontKnowPatterns.some((pattern) => pattern.test(lowered));
 }
 
 export function buildSeedQuery(profile: CandidateProfile): string {
