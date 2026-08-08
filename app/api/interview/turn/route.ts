@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { NextResponse, type NextRequest } from "next/server";
-import { classifyAnswer, generateFeedback, generateQuestion, type ClassifyResult } from "@/lib/gemini.ts";
+import { generateFeedback, type ClassifyResult } from "@/lib/gemini.ts";
+import { classifyAnswer, generateQuestion } from "@/lib/provider.ts";
 import {
   getCurriculumDay,
   getRelevantDays,

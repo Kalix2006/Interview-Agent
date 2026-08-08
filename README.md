@@ -5,13 +5,20 @@ AI-powered technical interview agent for the AI Cohort hackathon.
 ## Setup
 
 1. **Install dependencies:** `npm install`
-2. **Create a `.env` file** in the project root with your Gemini API key:
+2. **Create a `.env` file** in the project root with both API keys:
 
    ```
-   GEMINI_API_KEY=your-key-here
+   GEMINI_API_KEY=your-gemini-key-here
+   GROQ_API_KEY=your-groq-key-here
    ```
 
-   Get a free key from [Google AI Studio](https://aistudio.google.com/apikey).
+   - Get a Gemini key from [Google AI Studio](https://aistudio.google.com/apikey).
+   - Get a Groq key from [Groq Cloud Console](https://console.groq.com/keys).
+
+   **Groq** is used for per-turn `generateQuestion` and `classifyAnswer` calls (chat completions).
+   **Gemini** is used for embeddings (one-time, pre-computed) and as the fallback when Groq fails.
+   On any Groq error, the system falls back to Gemini for that single call — the user never sees an unhandled error.
+
 3. **Start the development server:** `npm run dev`
 4. **Open http://localhost:3000**
 

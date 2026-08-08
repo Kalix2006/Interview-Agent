@@ -158,7 +158,7 @@ const FALLBACK_QUESTION_TEMPLATES = [
   (obj: string) => `How would you go about: "${obj}"?`,
 ];
 
-function buildFallbackQuestion(days: RankedDay[], historyLength = 0): GeneratedQuestion {
+export function buildFallbackQuestion(days: RankedDay[], historyLength = 0): GeneratedQuestion {
   const dayPool = days.length > 0 ? days : [];
   const dayIndex = historyLength % Math.max(dayPool.length, 1);
   const pickedDay = dayPool[dayIndex] ?? days[0];
