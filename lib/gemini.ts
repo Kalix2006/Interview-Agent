@@ -23,6 +23,13 @@ export type HistoryEntry = {
   content: string;
 };
 
+export type FeedbackResult = {
+  summary: string;
+  strengths: string[];
+  gaps: string[];
+  next: string[];
+};
+
 export const CLASSIFY_FALLBACK: ClassifyResult = { depth: "adequate", hedging: false, accuracy: "med" };
 
 const GENAI_RETRIES = 2;
@@ -237,4 +244,83 @@ export async function classifyAnswer(question: string, answerText: string): Prom
   }, "classifyAnswer");
 
   return classified ?? { ...CLASSIFY_FALLBACK };
+}
+
+const FEEDBACK_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    summary: { type: Type.STRING, description: "2-3 sentence summary of the candidate's interview performance" },
+    strengths: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "2-4 concrete strengths demonstrated during the interview",
+    },
+    gaps: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "2-4 areas where the candidate was weak, vague, or incorrect",
+    },
+    next: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "2-4 actionable next steps for the candidate",
+    },
+  },
+  required: ["summary", "strengths", "gaps", "next"],
+};
+
+export function parseFeedbackResult(text: string): FeedbackResult | null {
+  const raw = extractJsonObject(text);
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const { summary, strengths, gaps, next } = raw as Record<string, unknown>;
+  if (typeof summary !== "string" || summary.trim().length === 0) return null;
+  if (!Array.isArray(strengths) || !strengths.every((item) => typeof item === "string")) return null;
+  if (!Array.isArray(gaps) || !gaps.every((item) => typeof item === "string")) return null;
+  if (!Array.isArray(next) || !next.every((item) => typeof item === "string")) return null;
+  return {
+    summary: summary.trim(),
+    strengths: strengths.map((item) => (item as string).trim()).filter((item) => item.length > 0),
+    gaps: gaps.map((item) => (item as string).trim()).filter((item) => item.length > 0),
+    next: next.map((item) => (item as string).trim()).filter((item) => item.length > 0),
+  };
+}
+
+function buildFeedbackFallback(history: HistoryEntry[], coveredDayIds: number[]): FeedbackResult {
+  const dayList = coveredDayIds.length > 0 ? coveredDayIds.map((d) => `Day ${d}`).join(", ") : "no days completed";
+  return {
+    summary: `The interview covered ${coveredDayIds.length} curriculum area(s): ${dayList}.`,
+    strengths: [],
+    gaps: [],
+    next: ["Revisit the curriculum days that were not fully covered during the interview."],
+  };
+}
+
+const FEEDBACK_SYSTEM_PROMPT = `You are a hiring manager reviewing a technical interview transcript for an AI engineering cohort focused on building a production healthcare chatbot.
+
+Given the full interview transcript (questions carry a day tag like [D:10] identifying the curriculum day they belong to) and the list of covered curriculum days, produce an interview feedback report as a strict JSON object:
+- "summary": string - 2-3 sentences summarizing overall performance.
+- "strengths": array of strings - 2-4 concrete strengths demonstrated.
+- "gaps": array of strings - 2-4 areas where the candidate was weak, vague, or technically off.
+- "next": array of strings - 2-4 actionable next steps for the candidate.
+
+Ground every point in what the candidate actually said. Do not invent topics. Respond ONLY with the JSON object.`;
+
+export async function generateFeedback(
+  history: HistoryEntry[],
+  coveredDayIds: number[]
+): Promise<FeedbackResult> {
+  const transcript = history
+    .map((h) => `${h.role === "interviewer" ? "Interviewer" : "Candidate"}: ${h.content}`)
+    .join("\n");
+  const covered = coveredDayIds.length > 0 ? coveredDayIds.join(", ") : "(none)";
+  const userPrompt = ["Covered curriculum days:", covered, "", "Interview transcript:", transcript].join("\n");
+
+  const generated = await withRetry(async () => {
+    const raw = await callJsonModel(FEEDBACK_SYSTEM_PROMPT, userPrompt, FEEDBACK_SCHEMA);
+    const result = parseFeedbackResult(raw);
+    if (!result) throw new Error("Gemini returned malformed JSON for generateFeedback");
+    return result;
+  }, "generateFeedback");
+
+  return generated ?? buildFeedbackFallback(history, coveredDayIds);
 }

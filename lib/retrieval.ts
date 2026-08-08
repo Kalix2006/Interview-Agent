@@ -76,6 +76,10 @@ function loadCurriculumDays(): CurriculumDay[] {
   return curriculumDaysCache;
 }
 
+export function getCurriculumDay(dayNumber: number): CurriculumDay | undefined {
+  return loadCurriculumDays().find((day) => day.day === dayNumber);
+}
+
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) {
     throw new Error(`Cannot compare embeddings of different dimensions (${a.length} vs ${b.length})`);
