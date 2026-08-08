@@ -119,7 +119,8 @@ export function rankDays(
   historyEmbedding: number[],
   profile: CandidateProfile,
   curriculumEmbeddings: CurriculumEmbedding[],
-  k: number
+  k: number,
+  extraCovered?: ReadonlySet<number>
 ): RankedDay[] {
   if (!Array.isArray(curriculumEmbeddings) || curriculumEmbeddings.length === 0) {
     throw new Error("curriculumEmbeddings must be a non-empty array");
@@ -131,6 +132,7 @@ export function rankDays(
   const scored: RankedDay[] = [];
   for (const item of curriculumEmbeddings) {
     if (covered.has(item.dayId)) continue;
+    if (extraCovered && extraCovered.has(item.dayId)) continue;
     const day = daysById.get(item.dayId);
     if (!day) continue;
     const score = cosineSimilarity(historyEmbedding, item.embedding) + (boosts.get(item.dayId) ?? 0);
@@ -173,12 +175,13 @@ export async function getRelevantDays(
   historyText: string,
   profile: CandidateProfile,
   curriculumEmbeddings: CurriculumEmbedding[],
-  k: number
+  k: number,
+  extraCovered?: ReadonlySet<number>
 ): Promise<RankedDay[]> {
   const text = historyText.trim();
   if (!text) {
     throw new Error("historyText must be a non-empty string");
   }
   const embedding = await embedText(text);
-  return rankDays(embedding, profile, curriculumEmbeddings, k);
+  return rankDays(embedding, profile, curriculumEmbeddings, k, extraCovered);
 }

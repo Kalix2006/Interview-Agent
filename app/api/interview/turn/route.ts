@@ -14,6 +14,7 @@ import {
   countQuestionsAsked,
   decideFollowUp,
   deriveCoveredDayIds,
+  isDontKnowAnswer,
   lastCandidateTurn,
   lastInterviewerTurn,
   normalizeHistory,
@@ -128,8 +129,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     const followUp = decideFollowUp(classification, history, hasPriorQuestion);
 
-    const queryText = hasPriorQuestion ? recentContextText(history) : buildSeedQuery(profile);
-    const retrieved = await getRelevantDays(queryText, profile, embeddings, RETRIEVAL_K);
+    const candidateSaysDontKnow = lastAnswer ? isDontKnowAnswer(lastAnswer.content) : false;
+    const queryText =
+      !hasPriorQuestion
+        ? buildSeedQuery(profile)
+        : candidateSaysDontKnow
+          ? buildSeedQuery(profile)
+          : recentContextText(history);
+    const retrieved = await getRelevantDays(queryText, profile, embeddings, RETRIEVAL_K, covered);
 
     let grounding: RankedDay[];
     if (followUp) {
