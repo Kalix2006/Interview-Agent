@@ -151,17 +151,28 @@ const FALLBACK_QUESTION_TEMPLATES = [
   (obj: string) => `How would you handle the following: "${obj}"?`,
   (obj: string) => `Tell me about your experience with: "${obj}".`,
   (obj: string) => `What's your thought process for: "${obj}"?`,
+  (obj: string) => `Explain how you would tackle: "${obj}".`,
+  (obj: string) => `Describe a scenario where you'd need to: "${obj}".`,
+  (obj: string) => `What would you do if asked to: "${obj}"?`,
+  (obj: string) => `Share your approach to: "${obj}".`,
+  (obj: string) => `How would you go about: "${obj}"?`,
 ];
 
 function buildFallbackQuestion(days: RankedDay[], historyLength = 0): GeneratedQuestion {
-  const top = days[0];
-  const objective = top.objectives[0] ?? "the core concepts of this curriculum day";
+  const dayPool = days.length > 0 ? days : [];
+  const dayIndex = historyLength % Math.max(dayPool.length, 1);
+  const pickedDay = dayPool[dayIndex] ?? days[0];
+  const objectives = pickedDay.objectives.length > 0
+    ? pickedDay.objectives
+    : ["the core concepts of this curriculum day"];
+  const objectiveIndex = historyLength % objectives.length;
+  const objective = objectives[objectiveIndex];
   const templateIndex = historyLength % FALLBACK_QUESTION_TEMPLATES.length;
   const template = FALLBACK_QUESTION_TEMPLATES[templateIndex];
   return {
-    day: top.day,
+    day: pickedDay.day,
     question: template(objective),
-    rationale: `Targeting Day ${top.day} (${top.title}) because it is the highest-priority area for this candidate.`,
+    rationale: `Targeting Day ${pickedDay.day} (${pickedDay.title}) because it is the highest-priority area for this candidate.`,
   };
 }
 
