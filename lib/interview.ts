@@ -103,3 +103,19 @@ export function recentContextText(history: HistoryEntry[], maxChars = 1200): str
   if (text.length > maxChars) text = "..." + text.slice(text.length - maxChars);
   return text;
 }
+
+export function normalizeHistory(value: unknown): HistoryEntry[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const history: HistoryEntry[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "object" || entry === null) return null;
+    const { role, content } = entry as { role?: unknown; content?: unknown };
+    if (role !== "interviewer" && role !== "candidate") return null;
+    if (typeof content !== "string") return null;
+    const trimmed = content.trim();
+    if (trimmed.length === 0) return null;
+    history.push({ role, content: trimmed });
+  }
+  return history;
+}

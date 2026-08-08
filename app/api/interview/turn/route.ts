@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { NextResponse, type NextRequest } from "next/server";
-import { classifyAnswer, generateFeedback, generateQuestion, type ClassifyResult, type HistoryEntry } from "@/lib/gemini.ts";
+import { classifyAnswer, generateFeedback, generateQuestion, type ClassifyResult } from "@/lib/gemini.ts";
 import {
   getCurriculumDay,
   getRelevantDays,
@@ -16,6 +16,7 @@ import {
   deriveCoveredDayIds,
   lastCandidateTurn,
   lastInterviewerTurn,
+  normalizeHistory,
   parseDayTag,
   recentContextText,
   shouldEndInterview,
@@ -84,22 +85,6 @@ function resolveCandidate(body: RequestBody): CandidateProfile | null {
     return loadCandidates().find((c) => c.member.id === body.candidateId) ?? null;
   }
   return null;
-}
-
-function normalizeHistory(value: unknown): HistoryEntry[] | null {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) return null;
-  const history: HistoryEntry[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "object" || entry === null) return null;
-    const { role, content } = entry as { role?: unknown; content?: unknown };
-    if (role !== "interviewer" && role !== "candidate") return null;
-    if (typeof content !== "string") return null;
-    const trimmed = content.trim();
-    if (trimmed.length === 0) return null;
-    history.push({ role, content: trimmed });
-  }
-  return history;
 }
 
 function httpError(message: string, status: number): NextResponse {

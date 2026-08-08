@@ -11,7 +11,8 @@
     "embed:curriculum": "node --env-file-if-exists=.env scripts/embed-curriculum.ts",
     "sanity:retrieval": "node --env-file-if-exists=.env scripts/sanity-check-retrieval.ts",
     "sanity:gemini": "node --env-file-if-exists=.env scripts/sanity-check-gemini.ts",
-    "sanity:interview": "node scripts/sanity-check-interview.ts"
+    "sanity:interview": "node scripts/sanity-check-interview.ts",
+    "sanity:feedback": "node scripts/sanity-check-feedback.ts"
   },
   "dependencies": {
     "next": "14.2.35",

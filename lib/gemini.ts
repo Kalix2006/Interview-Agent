@@ -324,3 +324,125 @@ export async function generateFeedback(
 
   return generated ?? buildFeedbackFallback(history, coveredDayIds);
 }
+
+export type Topic = {
+  day: number;
+  title: string;
+};
+
+export type TopicCompetency = Topic & {
+  score: "low" | "medium" | "high";
+  rationale: string;
+};
+
+export type FeedbackReport = {
+  topics: TopicCompetency[];
+  gaps: string[];
+  next: string[];
+};
+
+const FEEDBACK_REPORT_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    topics: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          day: { type: Type.INTEGER, description: "Curriculum day number, taken verbatim from the provided topic list" },
+          title: { type: Type.STRING, description: "Curriculum topic title, taken verbatim from the provided topic list" },
+          score: { type: Type.STRING, format: "enum", enum: ["low", "medium", "high"], description: "Competency level for this topic" },
+          rationale: { type: Type.STRING, description: "One sentence grounding the score in what the candidate actually said" },
+        },
+        required: ["day", "title", "score", "rationale"],
+      },
+    },
+    gaps: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "2-4 areas where the candidate was weak, vague, or technically off",
+    },
+    next: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: "2-4 actionable next steps for the candidate",
+    },
+  },
+  required: ["topics", "gaps", "next"],
+};
+
+export function parseFeedbackReport(text: string): FeedbackReport | null {
+  const raw = extractJsonObject(text);
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const { topics, gaps, next } = raw as Record<string, unknown>;
+  if (!Array.isArray(topics) || topics.length === 0) return null;
+  const parsedTopics: TopicCompetency[] = [];
+  for (const topic of topics) {
+    if (typeof topic !== "object" || topic === null) return null;
+    const { day, title, score, rationale } = topic as Record<string, unknown>;
+    if (typeof day !== "number" || !Number.isInteger(day)) return null;
+    if (typeof title !== "string" || title.trim().length === 0) return null;
+    if (score !== "low" && score !== "medium" && score !== "high") return null;
+    if (typeof rationale !== "string" || rationale.trim().length === 0) return null;
+    parsedTopics.push({ day, title: title.trim(), score, rationale: rationale.trim() });
+  }
+  const stringArray = (value: unknown): string[] | null => {
+    if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) return null;
+    return value.map((item) => (item as string).trim()).filter((item) => item.length > 0);
+  };
+  const parsedGaps = stringArray(gaps);
+  const parsedNext = stringArray(next);
+  if (parsedGaps === null || parsedNext === null) return null;
+  return { topics: parsedTopics, gaps: parsedGaps, next: parsedNext };
+}
+
+export function buildFeedbackReportFallback(topics: Topic[]): FeedbackReport {
+  return {
+    topics: topics.map((topic) => ({
+      ...topic,
+      score: "medium",
+      rationale: "Unable to generate a competency assessment for this topic.",
+    })),
+    gaps: ["Unable to generate full feedback."],
+    next: ["Please retry the feedback request."],
+  };
+}
+
+const FEEDBACK_REPORT_SYSTEM_PROMPT = `You are a hiring manager reviewing a technical interview transcript for an AI engineering cohort focused on building a production healthcare chatbot.
+
+You are given the interview transcript (questions carry a day tag like [D:10] identifying the curriculum day they belong to) and the list of curriculum topics that were covered.
+
+Produce a strict JSON object:
+- "topics": array of exactly the topics provided, one entry each, scored on the candidate's demonstrated competency:
+  - "day": number - the curriculum day, taken verbatim from the provided topic list
+  - "title": string - the topic title, taken verbatim from the provided topic list
+  - "score": "low" | "medium" | "high" - competency level for this topic
+  - "rationale": string - ONE sentence grounding the score in what the candidate actually said
+- "gaps": array of strings - 2-4 concrete areas where the candidate was weak, vague, or technically off
+- "next": array of strings - 2-4 actionable next steps for the candidate
+
+Return one entry per provided topic. Do not rename topics, do not add topics that were not provided, and do not invent anything not in the transcript. Respond ONLY with the JSON object.`;
+
+export async function generateFeedbackReport(history: HistoryEntry[], topics: Topic[]): Promise<FeedbackReport> {
+  if (!Array.isArray(topics) || topics.length === 0) {
+    throw new Error("generateFeedbackReport requires at least one covered topic");
+  }
+  const topicList = topics.map((topic) => `- Day ${topic.day}: ${topic.title}`).join("\n");
+  const transcript = history
+    .map((h) => `${h.role === "interviewer" ? "Interviewer" : "Candidate"}: ${h.content}`)
+    .join("\n");
+  const userPrompt = ["Covered curriculum topics:", topicList, "", "Interview transcript:", transcript].join("\n");
+
+  const report = await withRetry(async () => {
+    const raw = await callJsonModel(FEEDBACK_REPORT_SYSTEM_PROMPT, userPrompt, FEEDBACK_REPORT_SCHEMA);
+    const result = parseFeedbackReport(raw);
+    if (!result) throw new Error("Gemini returned malformed JSON for generateFeedbackReport");
+    const validDays = new Set(topics.map((topic) => topic.day));
+    if (!result.topics.every((topic) => validDays.has(topic.day))) {
+      throw new Error("Gemini returned topics outside the provided covered set");
+    }
+    return result;
+  }, "generateFeedbackReport");
+
+  return report ?? buildFeedbackReportFallback(topics);
+}
