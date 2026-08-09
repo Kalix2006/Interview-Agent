@@ -1,4 +1,4 @@
-import { buildFeedbackReportFallback, parseFeedbackReport, type Topic } from "../lib/gemini.ts";
+import { buildFeedbackReportFallback, parseFeedbackReport, type Topic } from "../lib/llm.ts";
 
 let failures = 0;
 

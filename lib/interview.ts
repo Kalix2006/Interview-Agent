@@ -1,4 +1,4 @@
-import type { ClassifyResult, HistoryEntry } from "./gemini.ts";
+import type { ClassifyResult, HistoryEntry } from "./llm.ts";
 import type { CandidateProfile } from "./retrieval.ts";
 
 export const DEFAULT_MIN_QUESTIONS = 8;

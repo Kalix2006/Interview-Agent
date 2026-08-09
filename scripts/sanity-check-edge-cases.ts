@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { CandidateProfile, CurriculumEmbedding } from "../lib/retrieval.ts";
+import type { CandidateProfile } from "../lib/retrieval.ts";
 import { getRelevantDays } from "../lib/retrieval.ts";
 import {
   countQuestionsAsked,
@@ -25,11 +25,6 @@ let failures = 0;
 function check(label: string, condition: boolean): void {
   if (!condition) failures++;
   console.log(`${condition ? "PASS" : "FAIL"}  ${label}`);
-}
-
-async function loadEmbeddings(): Promise<CurriculumEmbedding[]> {
-  const raw = readFileSync(resolve(process.cwd(), "data", "curriculum-embeddings.json"), "utf8");
-  return JSON.parse(raw) as CurriculumEmbedding[];
 }
 
 function loadCandidates(): CandidateProfile[] {
@@ -58,7 +53,6 @@ function resolveCandidate(body: { candidate?: unknown; candidateId?: unknown }):
 }
 
 async function runTests() {
-  const embeddings = await loadEmbeddings();
   const candidates = loadCandidates();
 
   console.log("\n=== EDGE CASE 1: Candidate with zero completed days ===");
@@ -81,7 +75,7 @@ async function runTests() {
   const seedQuery = `Interview a ${zeroDaysCandidate.member.jobRole} with ${zeroDaysCandidate.member.yearsExperience} years of experience on their weakest curriculum areas.`;
 
   try {
-    const retrieved = await getRelevantDays(seedQuery, zeroDaysCandidate, embeddings, 5);
+    const retrieved = await getRelevantDays(seedQuery, zeroDaysCandidate, 5);
     check("retrieval returns non-empty for zero-days candidate", retrieved.length > 0);
     check("retrieval returns RankedDay objects", retrieved.every(d => typeof d.day === "number" && typeof d.title === "string"));
     check("retrieval does not include passed days", !retrieved.some(d => zeroDaysCandidate.missions.some(m => m.day === d.day && m.passed === true)));
@@ -95,7 +89,7 @@ async function runTests() {
   console.log(`\nAlso testing real candidate: ${minPassedCandidate.member.name} (${minPassedCandidate.member.id}) with ${minPassedCandidate.missions.filter(m => m.passed === true).length} passed missions`);
   try {
     const realSeedQuery = `Interview a ${minPassedCandidate.member.jobRole} with ${minPassedCandidate.member.yearsExperience} years of experience on their weakest curriculum areas.`;
-    const retrieved2 = await getRelevantDays(realSeedQuery, minPassedCandidate, embeddings, 5);
+    const retrieved2 = await getRelevantDays(realSeedQuery, minPassedCandidate, 5);
     check("retrieval works for minimal passed-days candidate", retrieved2.length > 0);
   } catch (err) {
     check("retrieval works for minimal passed-days candidate", false);

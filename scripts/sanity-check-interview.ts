@@ -1,4 +1,4 @@
-import type { HistoryEntry } from "../lib/gemini.ts";
+import type { HistoryEntry } from "../lib/llm.ts";
 import {
   DEFAULT_MIN_DAYS,
   DEFAULT_MIN_QUESTIONS,

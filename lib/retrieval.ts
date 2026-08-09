@@ -1,8 +1,5 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { GoogleGenAI } from "@google/genai";
-
-export const EMBEDDING_MODEL = "gemini-embedding-001";
 
 export type CandidateMember = {
   id: string;
@@ -42,28 +39,22 @@ export type CurriculumDay = {
   objectives: string[];
 };
 
-export type CurriculumEmbedding = {
-  dayId: number;
-  embedding: number[];
-};
-
 export type RankedDay = CurriculumDay & { score: number };
 
 const SKIPPED_BOOST = 0.3;
 const FAILED_BOOST = 0.25;
 const HIGH_ATTEMPTS_BOOST = 0.15;
 const HIGH_ATTEMPTS_THRESHOLD = 3;
-const EMBED_RETRIES = 3;
+
+const STOPWORDS = new Set([
+  "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have", "how", "in",
+  "is", "it", "its", "of", "on", "or", "that", "the", "their", "them", "they", "this", "to",
+  "was", "were", "what", "when", "which", "who", "with", "you", "your", "candidate", "candidates",
+  "interview", "interviewing", "years", "experience", "weakest", "curriculum", "areas", "area",
+  "would", "can", "should", "must", "about", "into", "over", "out", "so", "than", "then", "too",
+]);
 
 let curriculumDaysCache: CurriculumDay[] | undefined;
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
-}
 
 function loadCurriculumDays(): CurriculumDay[] {
   if (curriculumDaysCache) return curriculumDaysCache;
@@ -78,22 +69,6 @@ function loadCurriculumDays(): CurriculumDay[] {
 
 export function getCurriculumDay(dayNumber: number): CurriculumDay | undefined {
   return loadCurriculumDays().find((day) => day.day === dayNumber);
-}
-
-export function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length) {
-    throw new Error(`Cannot compare embeddings of different dimensions (${a.length} vs ${b.length})`);
-  }
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 export function deriveCoveredDayIds(profile: CandidateProfile): Set<number> {
@@ -115,66 +90,74 @@ function deriveBoosts(profile: CandidateProfile): Map<number, number> {
   return boosts;
 }
 
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter((token) => token.length > 1 && !STOPWORDS.has(token));
+}
+
+function dayText(day: CurriculumDay): string {
+  return [day.title, day.type, ...day.tools, ...day.objectives].join(" ");
+}
+
+function buildDayIndex(days: CurriculumDay[]): Map<number, string[]> {
+  const index = new Map<number, string[]>();
+  for (const day of days) {
+    const tokens = tokenize(dayText(day));
+    index.set(day.day, [...new Set(tokens)]);
+  }
+  return index;
+}
+
+function computeIdf(days: CurriculumDay[], index: Map<number, string[]>): Map<string, number> {
+  const total = days.length;
+  const documentFrequency = new Map<string, number>();
+  for (const tokens of index.values()) {
+    for (const token of tokens) {
+      documentFrequency.set(token, (documentFrequency.get(token) ?? 0) + 1);
+    }
+  }
+  const idf = new Map<string, number>();
+  for (const [token, frequency] of documentFrequency) {
+    idf.set(token, Math.log(1 + total / (1 + frequency)));
+  }
+  return idf;
+}
+
 export function rankDays(
-  historyEmbedding: number[],
+  historyText: string,
   profile: CandidateProfile,
-  curriculumEmbeddings: CurriculumEmbedding[],
   k: number,
   extraCovered?: ReadonlySet<number>
 ): RankedDay[] {
-  if (!Array.isArray(curriculumEmbeddings) || curriculumEmbeddings.length === 0) {
-    throw new Error("curriculumEmbeddings must be a non-empty array");
-  }
+  const days = loadCurriculumDays();
+  const index = buildDayIndex(days);
+  const idf = computeIdf(days, index);
+  const queryTokens = new Set(tokenize(historyText));
   const covered = deriveCoveredDayIds(profile);
   const boosts = deriveBoosts(profile);
-  const daysById = new Map(loadCurriculumDays().map((day) => [day.day, day]));
 
   const scored: RankedDay[] = [];
-  for (const item of curriculumEmbeddings) {
-    if (covered.has(item.dayId)) continue;
-    if (extraCovered && extraCovered.has(item.dayId)) continue;
-    const day = daysById.get(item.dayId);
-    if (!day) continue;
-    const score = cosineSimilarity(historyEmbedding, item.embedding) + (boosts.get(item.dayId) ?? 0);
-    scored.push({ ...day, score });
+  for (const day of days) {
+    if (covered.has(day.day)) continue;
+    if (extraCovered && extraCovered.has(day.day)) continue;
+    const tokens = index.get(day.day) ?? [];
+    let score = 0;
+    for (const token of queryTokens) {
+      if (tokens.includes(token)) score += idf.get(token) ?? 1;
+    }
+    scored.push({ ...day, score: score + (boosts.get(day.day) ?? 0) });
   }
 
   scored.sort((a, b) => b.score - a.score || a.day - b.day);
   return scored.slice(0, k);
 }
 
-let aiClient: GoogleGenAI | undefined;
-
-async function embedText(text: string): Promise<number[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is required. Set it in a .env file or the environment. See README setup steps.");
-  }
-  const client = (aiClient ??= new GoogleGenAI({ apiKey }));
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= EMBED_RETRIES; attempt++) {
-    try {
-      const response = await client.models.embedContent({ model: EMBEDDING_MODEL, contents: text });
-      const values = response.embeddings?.[0]?.values;
-      if (!values || values.length === 0) {
-        throw new Error(`No embedding returned for query text (model ${EMBEDDING_MODEL})`);
-      }
-      return values;
-    } catch (error) {
-      lastError = error;
-      if (attempt < EMBED_RETRIES) {
-        const isRateLimit = /429|RESOURCE_EXHAUSTED/i.test(errorMessage(error));
-        await sleep((isRateLimit ? 2000 : 1000) * attempt);
-      }
-    }
-  }
-  throw new Error(`Embedding request failed after ${EMBED_RETRIES} attempts: ${errorMessage(lastError)}`);
-}
-
 export async function getRelevantDays(
   historyText: string,
   profile: CandidateProfile,
-  curriculumEmbeddings: CurriculumEmbedding[],
   k: number,
   extraCovered?: ReadonlySet<number>
 ): Promise<RankedDay[]> {
@@ -182,6 +165,5 @@ export async function getRelevantDays(
   if (!text) {
     throw new Error("historyText must be a non-empty string");
   }
-  const embedding = await embedText(text);
-  return rankDays(embedding, profile, curriculumEmbeddings, k, extraCovered);
+  return rankDays(text, profile, k, extraCovered);
 }

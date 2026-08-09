@@ -1,4 +1,13 @@
-import type { HistoryEntry, ClassifyResult, GeneratedQuestion } from "./gemini.ts";
+import {
+  parseFeedbackReport,
+  parseFeedbackResult,
+  type ClassifyResult,
+  type FeedbackReport,
+  type FeedbackResult,
+  type GeneratedQuestion,
+  type HistoryEntry,
+  type Topic,
+} from "./llm.ts";
 
 export const GROQ_CHAT_MODEL = "llama-3.3-70b-versatile";
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
@@ -186,4 +195,76 @@ Rules:
 
   const raw = await callGroqJson(systemPrompt, userPrompt, "generateQuestionGroq");
   return parseGeneratedQuestionGroq(raw);
+}
+
+function serializeFeedbackTranscript(history: HistoryEntry[]): string {
+  return history.map((h) => `${h.role === "interviewer" ? "Interviewer" : "Candidate"}: ${h.content}`).join("\n");
+}
+
+const FEEDBACK_SYSTEM_PROMPT = `You are a hiring manager reviewing a technical interview transcript for an AI engineering cohort focused on building a production healthcare chatbot.
+
+Given the full interview transcript (questions carry a day tag like [D:10] identifying the curriculum day they belong to) and the list of covered curriculum days, produce an interview feedback report as a strict JSON object:
+- "summary": string - 2-3 sentences summarizing overall performance.
+- "strengths": array of strings - 2-4 concrete strengths demonstrated.
+- "gaps": array of strings - 2-4 areas where the candidate was weak, vague, or technically off.
+- "next": array of strings - 2-4 actionable next steps for the candidate.
+
+Ground every point in what the candidate actually said. Do not invent topics. Respond ONLY with the JSON object.`;
+
+export async function generateFeedbackGroq(
+  history: HistoryEntry[],
+  coveredDayIds: number[]
+): Promise<FeedbackResult | null> {
+  const covered = coveredDayIds.length > 0 ? coveredDayIds.join(", ") : "(none)";
+  const userPrompt = [
+    "Covered curriculum days:",
+    covered,
+    "",
+    "Interview transcript:",
+    serializeFeedbackTranscript(history),
+  ].join("\n");
+
+  const raw = await callGroqJson(FEEDBACK_SYSTEM_PROMPT, userPrompt, "generateFeedbackGroq");
+  return parseFeedbackResult(raw);
+}
+
+const FEEDBACK_REPORT_SYSTEM_PROMPT = `You are a hiring manager reviewing a technical interview transcript for an AI engineering cohort focused on building a production healthcare chatbot.
+
+You are given the interview transcript (questions carry a day tag like [D:10] identifying the curriculum day they belong to) and the list of curriculum topics that were covered.
+
+Produce a strict JSON object:
+- "topics": array of exactly the topics provided, one entry each, scored on the candidate's demonstrated competency:
+  - "day": number - the curriculum day, taken verbatim from the provided topic list
+  - "title": string - the topic title, taken verbatim from the provided topic list
+  - "score": "low" | "medium" | "high" - competency level for this topic
+  - "rationale": string - ONE sentence grounding the score in what the candidate actually said
+- "gaps": array of strings - 2-4 concrete areas where the candidate was weak, vague, or technically off
+- "next": array of strings - 2-4 actionable next steps for the candidate
+
+Return one entry per provided topic. Do not rename topics, do not add topics that were not provided, and do not invent anything not in the transcript. Respond ONLY with the JSON object.`;
+
+export async function generateFeedbackReportGroq(
+  history: HistoryEntry[],
+  topics: Topic[]
+): Promise<FeedbackReport | null> {
+  if (!Array.isArray(topics) || topics.length === 0) {
+    throw new Error("generateFeedbackReportGroq requires at least one covered topic");
+  }
+  const topicList = topics.map((topic) => `- Day ${topic.day}: ${topic.title}`).join("\n");
+  const userPrompt = [
+    "Covered curriculum topics:",
+    topicList,
+    "",
+    "Interview transcript:",
+    serializeFeedbackTranscript(history),
+  ].join("\n");
+
+  const raw = await callGroqJson(FEEDBACK_REPORT_SYSTEM_PROMPT, userPrompt, "generateFeedbackReportGroq");
+  const result = parseFeedbackReport(raw);
+  if (!result) return null;
+  const validDays = new Set(topics.map((topic) => topic.day));
+  if (!result.topics.every((topic) => validDays.has(topic.day))) {
+    return null;
+  }
+  return result;
 }

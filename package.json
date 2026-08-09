@@ -8,13 +8,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "embed:curriculum": "node --env-file-if-exists=.env scripts/embed-curriculum.ts",
     "sanity:retrieval": "node --env-file-if-exists=.env scripts/sanity-check-retrieval.ts",
-    "sanity:gemini": "node --env-file-if-exists=.env scripts/sanity-check-gemini.ts",
+    "sanity:llm": "node --env-file-if-exists=.env scripts/sanity-check-llm.ts",
     "sanity:interview": "node scripts/sanity-check-interview.ts",
     "sanity:feedback": "node scripts/sanity-check-feedback.ts",
     "sanity:provider": "node scripts/sanity-check-provider.ts",
-    "sanity:voice": "node scripts/sanity-check-voice.ts"
+    "sanity:voice": "node scripts/sanity-check-voice.ts",
+    "sanity:edge": "node --env-file-if-exists=.env scripts/sanity-check-edge-cases.ts"
   },
   "dependencies": {
     "next": "14.2.35",
@@ -22,7 +22,6 @@
     "react-dom": "^18"
   },
   "devDependencies": {
-    "@google/genai": "^2.16.0",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",

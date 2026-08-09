@@ -1,5 +1,5 @@
 import type { RankedDay } from "../lib/retrieval.ts";
-import type { HistoryEntry } from "../lib/gemini.ts";
+import type { HistoryEntry } from "../lib/llm.ts";
 import { classifyAnswerGroq, generateQuestionGroq, parseClassifyResultGroq, parseGeneratedQuestionGroq } from "../lib/groq.ts";
 
 let failures = 0;
@@ -126,7 +126,7 @@ async function main(): Promise<void> {
   }
   check("classifyAnswerGroq throws when GROQ_API_KEY missing (provider.ts catches it)", threw);
 
-  console.log("\n=== Provider: provider.ts fallback chain (Groq fails → Gemini called) ===");
+  console.log("\n=== Provider: provider.ts fallback chain (Groq fails → deterministic fallback) ===");
 
   const provider = await import("../lib/provider.ts");
   check("provider.ts exports generateQuestion", typeof provider.generateQuestion === "function");
@@ -142,7 +142,7 @@ async function main(): Promise<void> {
     } catch (e) {
       console.log(`  unexpected throw: ${e instanceof Error ? e.message : String(e)}`);
     }
-    check("provider.classifyAnswer returns a result when Groq fails (falls back to Gemini)", result !== undefined);
+    check("provider.classifyAnswer returns a result when Groq fails (deterministic fallback)", result !== undefined);
     if (result) {
       check("fallback result has valid shape", result.depth !== undefined && typeof result.hedging === "boolean" && result.accuracy !== undefined);
     }
@@ -155,7 +155,7 @@ async function main(): Promise<void> {
     } catch (e) {
       console.log(`  unexpected throw: ${e instanceof Error ? e.message : String(e)}`);
     }
-    check("provider.generateQuestion returns a result when Groq fails (falls back to Gemini)", result !== undefined);
+    check("provider.generateQuestion returns a result when Groq fails (deterministic fallback)", result !== undefined);
     if (result) {
       check("fallback question has valid shape", typeof result.day === "number" && typeof result.question === "string" && result.question.length > 0);
     }

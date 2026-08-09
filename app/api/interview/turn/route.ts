@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { NextResponse, type NextRequest } from "next/server";
-import { generateFeedback, type ClassifyResult } from "@/lib/gemini.ts";
+import { buildFeedbackFallback, type ClassifyResult } from "@/lib/llm.ts";
+import { generateFeedbackGroq } from "@/lib/groq.ts";
 import { classifyAnswer, generateQuestion } from "@/lib/provider.ts";
 import {
   getCurriculumDay,
   getRelevantDays,
   type CandidateProfile,
-  type CurriculumEmbedding,
   type RankedDay,
 } from "@/lib/retrieval.ts";
 import {
@@ -30,19 +30,7 @@ export const dynamic = "force-dynamic";
 
 const RETRIEVAL_K = 5;
 
-let embeddingsCache: CurriculumEmbedding[] | undefined;
 let candidatesCache: CandidateProfile[] | undefined;
-
-function loadEmbeddings(): CurriculumEmbedding[] {
-  if (embeddingsCache) return embeddingsCache;
-  const raw = readFileSync(resolve(process.cwd(), "data", "curriculum-embeddings.json"), "utf8");
-  const parsed = JSON.parse(raw) as CurriculumEmbedding[];
-  if (!Array.isArray(parsed) || parsed.length === 0) {
-    throw new Error('data/curriculum-embeddings.json must contain a non-empty array of {dayId, embedding}');
-  }
-  embeddingsCache = parsed;
-  return parsed;
-}
 
 function loadCandidates(): CandidateProfile[] {
   if (candidatesCache) return candidatesCache;
@@ -108,15 +96,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return httpError('"history" must be an array of { role, content } turns', 400);
     }
     const options = completionOptions();
-    const embeddings = loadEmbeddings();
 
     const questionsAsked = countQuestionsAsked(history);
     const covered = deriveCoveredDayIds(history);
     const daysCovered = covered.size;
 
     if (shouldEndInterview(questionsAsked, daysCovered, options)) {
-      const feedback = await generateFeedback(history, [...covered].sort((a, b) => a - b));
-      return NextResponse.json({ reply: "Interview completed.", done: true, feedback });
+      const feedback = await generateFeedbackGroq(history, [...covered].sort((a, b) => a - b));
+      return NextResponse.json({
+        reply: "Interview completed.",
+        done: true,
+        feedback: feedback ?? buildFeedbackFallback(history, [...covered].sort((a, b) => a - b)),
+      });
     }
 
     const hasPriorQuestion = questionsAsked > 0;
@@ -137,7 +128,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         : candidateSaysDontKnow
           ? buildSeedQuery(profile)
           : recentContextText(history);
-    const retrieved = await getRelevantDays(queryText, profile, embeddings, RETRIEVAL_K, covered);
+    const retrieved = await getRelevantDays(queryText, profile, RETRIEVAL_K, covered);
 
     let grounding: RankedDay[];
     if (followUp) {

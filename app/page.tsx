@@ -144,6 +144,12 @@ export default function Home() {
     }
   };
 
+  const buildApiHistory = () =>
+    messagesRef.current.map((m) => ({
+      role: m.role,
+      content: m.role === 'interviewer' && m.day != null ? `[D:${m.day}] ${m.content}` : m.content,
+    }));
+
   const stopEndTimer = () => {
     if (endTimerRef.current !== null) {
       window.clearInterval(endTimerRef.current);
@@ -172,12 +178,16 @@ export default function Home() {
     utterance.pitch = 1;
     utterance.volume = 1;
     utterance.onend = () => onDone();
-    utterance.onerror = () => onDone();
+    utterance.onerror = (e) => {
+      const err = (e as unknown as { error?: string }).error;
+      if (err === 'canceled' || err === 'interrupted') return;
+      onDone();
+    };
     window.speechSynthesis.speak(utterance);
   };
 
   const startTurn = () => {
-    const history = messagesRef.current.map((m) => ({ role: m.role, content: m.content }));
+    const history = buildApiHistory();
     fetch('/api/interview/turn', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -310,6 +320,8 @@ export default function Home() {
       case 'noop':
         return;
       case 'speak': {
+        stopListening();
+        clearTimers();
         lastQuestionTextRef.current = decision.text;
         if (mutedRef.current) return;
         speakText(decision.text, () => dispatch({ type: 'AI_SPEECH_ENDED' }));
@@ -350,6 +362,8 @@ export default function Home() {
         return;
       }
       case 'request_turn': {
+        stopListening();
+        clearTimers();
         const content = decision.transcript || '[No response]';
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'candidate', content }]);
         if (turnInFlightRef.current) return;
@@ -362,7 +376,7 @@ export default function Home() {
         clearTimers();
         stopEndTimer();
         setEndCountdown(0);
-        const history = messagesRef.current.map((m) => ({ role: m.role, content: m.content }));
+        const history = buildApiHistory();
         fetch('/api/interview/feedback', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

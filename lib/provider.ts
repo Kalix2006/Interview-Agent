@@ -1,13 +1,11 @@
 import type { RankedDay } from "./retrieval.ts";
 import {
   buildFallbackQuestion,
-  classifyAnswer as classifyAnswerGemini,
   CLASSIFY_FALLBACK,
-  generateQuestion as generateQuestionGemini,
   type ClassifyResult,
   type GeneratedQuestion,
   type HistoryEntry,
-} from "./gemini.ts";
+} from "./llm.ts";
 import { classifyAnswerGroq, generateQuestionGroq } from "./groq.ts";
 
 function redactError(error: unknown): string {
@@ -15,31 +13,6 @@ function redactError(error: unknown): string {
     return error.message.replace(/(?:Bearer\s+|key=)[A-Za-z0-9._\-]+/gi, "[REDACTED]");
   }
   return String(error).replace(/(?:Bearer\s+|key=)[A-Za-z0-9._\-]+/gi, "[REDACTED]");
-}
-
-async function tryGroqGenerateQuestion(
-  retrievedDays: RankedDay[],
-  history: HistoryEntry[],
-  isFollowUp: boolean
-): Promise<GeneratedQuestion | null> {
-  try {
-    return await generateQuestionGroq(retrievedDays, history, isFollowUp);
-  } catch (error) {
-    console.warn(`[provider] groq generateQuestion failed: ${redactError(error)} — falling back to gemini`);
-    return null;
-  }
-}
-
-async function tryGroqClassifyAnswer(
-  question: string,
-  answerText: string
-): Promise<ClassifyResult | null> {
-  try {
-    return await classifyAnswerGroq(question, answerText);
-  } catch (error) {
-    console.warn(`[provider] groq classifyAnswer failed: ${redactError(error)} — falling back to gemini`);
-    return null;
-  }
 }
 
 export async function generateQuestion(
@@ -51,10 +24,14 @@ export async function generateQuestion(
     throw new Error("generateQuestion requires at least one retrieved day");
   }
 
-  const groqResult = await tryGroqGenerateQuestion(retrievedDays, history, isFollowUp);
-  if (groqResult) return groqResult;
+  try {
+    const result = await generateQuestionGroq(retrievedDays, history, isFollowUp);
+    if (result) return result;
+  } catch (error) {
+    console.warn(`[provider] groq generateQuestion failed: ${redactError(error)} — using deterministic fallback`);
+  }
 
-  return await generateQuestionGemini(retrievedDays, history, isFollowUp);
+  return buildFallbackQuestion(retrievedDays, history.length);
 }
 
 export async function classifyAnswer(
@@ -67,10 +44,14 @@ export async function classifyAnswer(
     throw new Error("classifyAnswer requires non-empty question and answerText");
   }
 
-  const groqResult = await tryGroqClassifyAnswer(trimmedQuestion, trimmedAnswer);
-  if (groqResult) return groqResult;
+  try {
+    const result = await classifyAnswerGroq(trimmedQuestion, trimmedAnswer);
+    if (result) return result;
+  } catch (error) {
+    console.warn(`[provider] groq classifyAnswer failed: ${redactError(error)} — using deterministic fallback`);
+  }
 
-  return await classifyAnswerGemini(trimmedQuestion, trimmedAnswer);
+  return { ...CLASSIFY_FALLBACK };
 }
 
 export { CLASSIFY_FALLBACK, buildFallbackQuestion };

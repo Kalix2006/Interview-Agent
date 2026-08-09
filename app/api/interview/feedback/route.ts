@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { generateFeedbackReport, type Topic } from "@/lib/gemini.ts";
+import { buildFeedbackReportFallback, type Topic } from "@/lib/llm.ts";
+import { generateFeedbackReportGroq } from "@/lib/groq.ts";
 import { deriveCoveredDayIds, normalizeHistory } from "@/lib/interview.ts";
 import { getCurriculumDay } from "@/lib/retrieval.ts";
 
@@ -35,8 +36,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    const report = await generateFeedbackReport(history, topics);
-    return NextResponse.json(report);
+    const report = await generateFeedbackReportGroq(history, topics);
+    return NextResponse.json(report ?? buildFeedbackReportFallback(topics));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return httpError(`Feedback request failed: ${message}`, 500);
