@@ -57,7 +57,8 @@ async function callGroqJson(
   systemPrompt: string,
   userPrompt: string,
   label: string,
-  maxTokens = 1024
+  maxTokens = 1024,
+  timeoutMs = REQUEST_TIMEOUT_MS
 ): Promise<string> {
   const apiKey = getApiKey();
   const response = await fetchWithTimeout(
@@ -79,7 +80,7 @@ async function callGroqJson(
         max_tokens: maxTokens,
       }),
     },
-    REQUEST_TIMEOUT_MS
+    timeoutMs
   );
 
   if (!response.ok) {
@@ -137,7 +138,7 @@ Classify the candidate's answer to the question into a strict JSON object:
 Respond ONLY with the JSON object. Do not add any commentary.`;
   const userPrompt = ["Question:", trimmedQuestion, "", "Candidate's answer:", trimmedAnswer].join("\n");
 
-  const raw = await callGroqJson(systemPrompt, userPrompt, "classifyAnswerGroq");
+  const raw = await callGroqJson(systemPrompt, userPrompt, "classifyAnswerGroq", 1024, 6000);
   return parseClassifyResultGroq(raw);
 }
 
@@ -195,7 +196,7 @@ Rules:
     `Question type: ${followUp ? "FOLLOW-UP on the candidate's last answer" : "FRESH question to open the next area"}`,
   ].join("\n");
 
-  const raw = await callGroqJson(systemPrompt, userPrompt, "generateQuestionGroq");
+  const raw = await callGroqJson(systemPrompt, userPrompt, "generateQuestionGroq", 1024, 12000);
   return parseGeneratedQuestionGroq(raw);
 }
 

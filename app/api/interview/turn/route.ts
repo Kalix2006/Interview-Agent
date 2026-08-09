@@ -1,10 +1,15 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { NextResponse, type NextRequest } from "next/server";
-import { buildFeedbackFallback, type ClassifyResult } from "@/lib/llm.ts";
+import {
+  buildFeedbackFallback,
+  type ClassifyResult,
+  type FeedbackResult,
+} from "@/lib/llm.ts";
 import { generateFeedbackGroq } from "@/lib/groq.ts";
 import { classifyAnswer, generateQuestion } from "@/lib/provider.ts";
 import {
+  deriveCoveredDayIds as deriveProfileCoveredDayIds,
   getCurriculumDay,
   getRelevantDays,
   type CandidateProfile,
@@ -29,6 +34,12 @@ import {
 export const dynamic = "force-dynamic";
 
 const RETRIEVAL_K = 5;
+
+type TurnResponse = {
+  reply: string;
+  done: boolean;
+  feedback?: FeedbackResult;
+};
 
 let candidatesCache: CandidateProfile[] | undefined;
 
@@ -81,6 +92,106 @@ function httpError(message: string, status: number): NextResponse {
   return NextResponse.json({ error: message }, { status });
 }
 
+function firstFallbackDay(profile: CandidateProfile, interviewCovered: ReadonlySet<number>): RankedDay {
+  const profileCovered = deriveProfileCoveredDayIds(profile);
+  for (let day = 1; day <= 31; day++) {
+    const curriculumDay = getCurriculumDay(day);
+    if (curriculumDay && !profileCovered.has(day) && !interviewCovered.has(day)) {
+      return { ...curriculumDay, score: 0 };
+    }
+  }
+  for (let day = 1; day <= 31; day++) {
+    const curriculumDay = getCurriculumDay(day);
+    if (curriculumDay && !interviewCovered.has(day)) {
+      return { ...curriculumDay, score: 0 };
+    }
+  }
+  const any = getCurriculumDay(1);
+  return {
+    ...(any ?? { day: 1, title: "Core Concepts", type: "MODULE", tools: [], objectives: [] }),
+    score: 0,
+  };
+}
+
+async function runInterviewTurn(
+  profile: CandidateProfile,
+  history: NonNullable<ReturnType<typeof normalizeHistory>>,
+  options: CompletionOptions
+): Promise<TurnResponse> {
+  const questionsAsked = countQuestionsAsked(history);
+  const covered = deriveCoveredDayIds(history);
+  const daysCovered = covered.size;
+
+  if (shouldEndInterview(questionsAsked, daysCovered, options)) {
+    const feedback = await generateFeedbackGroq(history, [...covered].sort((a, b) => a - b));
+    return {
+      reply: "Interview completed.",
+      done: true,
+      feedback: feedback ?? buildFeedbackFallback(history, [...covered].sort((a, b) => a - b)),
+    };
+  }
+
+  const hasPriorQuestion = questionsAsked > 0;
+  let classification: ClassifyResult | null = null;
+  const lastAnswer = lastCandidateTurn(history);
+  const candidateSaysDontKnow = lastAnswer ? isDontKnowAnswer(lastAnswer.content) : false;
+  if (hasPriorQuestion && lastAnswer && !candidateSaysDontKnow) {
+    const lastQuestion = lastInterviewerTurn(history);
+    if (lastQuestion) {
+      classification = await classifyAnswer(lastQuestion.content, lastAnswer.content);
+    }
+  }
+  const followUp = decideFollowUp(classification, history, hasPriorQuestion) && !candidateSaysDontKnow;
+
+  const queryText =
+    !hasPriorQuestion
+      ? buildSeedQuery(profile)
+      : candidateSaysDontKnow
+        ? buildSeedQuery(profile)
+        : recentContextText(history);
+  let retrieved = await getRelevantDays(queryText, profile, RETRIEVAL_K, covered);
+  if (retrieved.length === 0) {
+    retrieved = [firstFallbackDay(profile, covered)];
+  }
+
+  let grounding: RankedDay[];
+  if (followUp) {
+    const lastQuestion = lastInterviewerTurn(history);
+    const currentDay = lastQuestion ? parseDayTag(lastQuestion.content) : null;
+    const dayObj = currentDay !== null ? getCurriculumDay(currentDay) : undefined;
+    grounding = dayObj ? [{ ...dayObj, score: Number.MAX_SAFE_INTEGER }] : retrieved;
+    if (grounding.length === 0) {
+      grounding = [firstFallbackDay(profile, covered)];
+    }
+  } else {
+    grounding = retrieved;
+  }
+
+  const generated = await generateQuestion(grounding, history, followUp);
+  const day = Number.isInteger(generated.day) && generated.day >= 1 ? generated.day : grounding[0].day;
+  covered.add(day);
+  return { reply: tagQuestion(day, generated.question), done: false };
+}
+
+function buildFallbackTurn(
+  profile: CandidateProfile,
+  history: NonNullable<ReturnType<typeof normalizeHistory>>,
+  options: CompletionOptions
+): TurnResponse {
+  const covered = deriveCoveredDayIds(history);
+  if (shouldEndInterview(countQuestionsAsked(history), covered.size, options)) {
+    return {
+      reply: "Interview completed.",
+      done: true,
+      feedback: buildFeedbackFallback(history, [...covered].sort((a, b) => a - b)),
+    };
+  }
+  const day = firstFallbackDay(profile, covered);
+  const reply = tagQuestion(day.day, `Walk me through how you would approach ${day.title.toLowerCase()}.`);
+  covered.add(day.day);
+  return { reply, done: false };
+}
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
     const body = (await request.json().catch(() => null)) as RequestBody | null;
@@ -97,54 +208,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     const options = completionOptions();
 
-    const questionsAsked = countQuestionsAsked(history);
-    const covered = deriveCoveredDayIds(history);
-    const daysCovered = covered.size;
-
-    if (shouldEndInterview(questionsAsked, daysCovered, options)) {
-      const feedback = await generateFeedbackGroq(history, [...covered].sort((a, b) => a - b));
-      return NextResponse.json({
-        reply: "Interview completed.",
-        done: true,
-        feedback: feedback ?? buildFeedbackFallback(history, [...covered].sort((a, b) => a - b)),
-      });
+    try {
+      return NextResponse.json(await runInterviewTurn(profile, history, options));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[turn] interview turn failed, using deterministic fallback: ${message}`);
+      return NextResponse.json(buildFallbackTurn(profile, history, options));
     }
-
-    const hasPriorQuestion = questionsAsked > 0;
-    let classification: ClassifyResult | null = null;
-    const lastAnswer = lastCandidateTurn(history);
-    const candidateSaysDontKnow = lastAnswer ? isDontKnowAnswer(lastAnswer.content) : false;
-    if (hasPriorQuestion && lastAnswer && !candidateSaysDontKnow) {
-      const lastQuestion = lastInterviewerTurn(history);
-      if (lastQuestion) {
-        classification = await classifyAnswer(lastQuestion.content, lastAnswer.content);
-      }
-    }
-    const followUp = decideFollowUp(classification, history, hasPriorQuestion) && !candidateSaysDontKnow;
-
-    const queryText =
-      !hasPriorQuestion
-        ? buildSeedQuery(profile)
-        : candidateSaysDontKnow
-          ? buildSeedQuery(profile)
-          : recentContextText(history);
-    const retrieved = await getRelevantDays(queryText, profile, RETRIEVAL_K, covered);
-
-    let grounding: RankedDay[];
-    if (followUp) {
-      const lastQuestion = lastInterviewerTurn(history);
-      const currentDay = lastQuestion ? parseDayTag(lastQuestion.content) : null;
-      const dayObj = currentDay !== null ? getCurriculumDay(currentDay) : undefined;
-      grounding = dayObj ? [{ ...dayObj, score: Number.MAX_SAFE_INTEGER }] : retrieved;
-    } else {
-      grounding = retrieved;
-    }
-
-    const generated = await generateQuestion(grounding, history, followUp);
-    covered.add(generated.day);
-    const reply = tagQuestion(generated.day, generated.question);
-
-    return NextResponse.json({ reply, done: false });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return httpError(`Interview turn failed: ${message}`, 500);

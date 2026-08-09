@@ -89,6 +89,23 @@ Branch: `main` · Working directory: `C:\Users\Kalimuthukumar\Desktop\Interview 
 
 ---
 
+## 7. Mid-interview 500 on Vercel (`/api/interview/turn`)
+
+**Prompt:** "Failed to load resource: the server responded with a status of 500 ()" — during a live interview on Vercel.
+
+**Root cause:** Groq returned HTTP 429 (daily token limit nearly exhausted — 99,371/100,000 tokens used in one day) on mid-interview turns. The turn route had no provider-level fallback for `generateFeedbackGroq` at the completion turn, and an empty retrieval result could reach `generateQuestion` unguarded — either path threw and surfaced as a 500.
+
+**What was done:**
+- `lib/groq.ts`: `callGroqJson` now accepts a per-call timeout; classify uses 6s, question generation 12s (fail fast instead of burning the whole function budget), feedback stays at 30s.
+- `lib/llm.ts`: `buildFallbackQuestion` now guards against an empty/invalid days array with a general engineering question.
+- `app/api/interview/turn/route.ts`: the route is now **fail-closed** — any app-level error inside the interview turn degrades to a deterministic grounded question (or a completed turn with fallback feedback) and returns HTTP 200, never 500. Retrieval returning zero days falls back to the first uncovered curriculum day; the completion-path feedback falls back via the same safety net.
+
+**Files changed:** `lib/groq.ts`, `lib/llm.ts`, `app/api/interview/turn/route.ts`
+
+**Outcome:** Verified end-to-end against the production build (`next start`) while Groq was actively rate-limiting: a mid-interview turn returns 200 with a grounded `[D:…]` question, and a completion turn returns 200 with `done: true` + fallback feedback. All 7 sanity suites pass; lint and build clean.
+
+---
+
 ## Session summary
 
 | Area | Change |
@@ -98,4 +115,5 @@ Branch: `main` · Working directory: `C:\Users\Kalimuthukumar\Desktop\Interview 
 | Voice UX | Mic active only during listening; long answers captured without splitting |
 | Idle handling | Real-time mic-level monitoring defers idle/silence timers while talking |
 | Feedback | Per-topic competency report grounded in the transcript; graceful fallbacks |
+| Turn resilience | `/api/interview/turn` fail-closed: provider failures degrade to grounded questions, never 500; per-call Groq timeouts |
 | Verification | `npm run lint`, `npm run build`, and all sanity suites pass; endpoints verified against `next start` |

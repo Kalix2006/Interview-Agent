@@ -145,9 +145,16 @@ const FALLBACK_QUESTION_TEMPLATES = [
 ];
 
 export function buildFallbackQuestion(days: RankedDay[], historyLength = 0): GeneratedQuestion {
-  const dayPool = days.length > 0 ? days : [];
-  const dayIndex = historyLength % Math.max(dayPool.length, 1);
-  const pickedDay = dayPool[dayIndex] ?? days[0];
+  const dayPool = Array.isArray(days) ? days.filter((day) => day && Array.isArray(day.objectives)) : [];
+  if (dayPool.length === 0) {
+    return {
+      day: 1,
+      question: "Walk me through a production system you have built, from requirements to deployment.",
+      rationale: "Opening with a general engineering question because no curriculum day is available for grounding.",
+    };
+  }
+  const dayIndex = historyLength % dayPool.length;
+  const pickedDay = dayPool[dayIndex];
   const objectives = pickedDay.objectives.length > 0
     ? pickedDay.objectives
     : ["the core concepts of this curriculum day"];
