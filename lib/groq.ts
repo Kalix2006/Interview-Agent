@@ -7,11 +7,12 @@ import {
   type GeneratedQuestion,
   type HistoryEntry,
   type Topic,
+  type TopicCompetency,
 } from "./llm.ts";
 
 export const GROQ_CHAT_MODEL = "llama-3.3-70b-versatile";
 const GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 30000;
 
 function getApiKey(): string {
   const apiKey = process.env.GROQ_API_KEY;
@@ -55,7 +56,8 @@ function extractJsonObject(text: string): unknown {
 async function callGroqJson(
   systemPrompt: string,
   userPrompt: string,
-  label: string
+  label: string,
+  maxTokens = 1024
 ): Promise<string> {
   const apiKey = getApiKey();
   const response = await fetchWithTimeout(
@@ -74,7 +76,7 @@ async function callGroqJson(
         ],
         response_format: { type: "json_object" },
         temperature: 0.3,
-        max_tokens: 1024,
+        max_tokens: maxTokens,
       }),
     },
     REQUEST_TIMEOUT_MS
@@ -224,7 +226,7 @@ export async function generateFeedbackGroq(
     serializeFeedbackTranscript(history),
   ].join("\n");
 
-  const raw = await callGroqJson(FEEDBACK_SYSTEM_PROMPT, userPrompt, "generateFeedbackGroq");
+  const raw = await callGroqJson(FEEDBACK_SYSTEM_PROMPT, userPrompt, "generateFeedbackGroq", 2048);
   return parseFeedbackResult(raw);
 }
 
@@ -259,12 +261,17 @@ export async function generateFeedbackReportGroq(
     serializeFeedbackTranscript(history),
   ].join("\n");
 
-  const raw = await callGroqJson(FEEDBACK_REPORT_SYSTEM_PROMPT, userPrompt, "generateFeedbackReportGroq");
+  const raw = await callGroqJson(FEEDBACK_REPORT_SYSTEM_PROMPT, userPrompt, "generateFeedbackReportGroq", 2048);
   const result = parseFeedbackReport(raw);
   if (!result) return null;
   const validDays = new Set(topics.map((topic) => topic.day));
-  if (!result.topics.every((topic) => validDays.has(topic.day))) {
-    return null;
-  }
-  return result;
+  const byDay = new Map(result.topics.filter((topic) => validDays.has(topic.day)).map((topic) => [topic.day, topic]));
+  const merged: TopicCompetency[] = topics.map((topic) => ({
+    ...(byDay.get(topic.day) ?? {
+      ...topic,
+      score: "medium",
+      rationale: "No specific assessment was returned for this topic.",
+    }),
+  }));
+  return { ...result, topics: merged };
 }

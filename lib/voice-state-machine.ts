@@ -44,7 +44,7 @@ export type Decision =
   | { kind: 'reset' };
 
 export const IDLE_PROMPT_MS = 10000;
-export const END_OF_TURN_SILENCE_MS = 2500;
+export const END_OF_TURN_SILENCE_MS = 4000;
 export const IDLE_PROMPTS_BEFORE_END_WARNING = 1;
 export const END_WARNING_TIMEOUT_MS = 30000;
 

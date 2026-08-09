@@ -75,6 +75,7 @@ export default function Home() {
   const turnInFlightRef = useRef(false);
   const lastCallAtRef = useRef(0);
   const partialTranscriptRef = useRef('');
+  const finalTranscriptRef = useRef('');
   const lastQuestionTextRef = useRef('');
   const idleTimerRef = useRef<number | null>(null);
   const silenceTimerRef = useRef<number | null>(null);
@@ -160,6 +161,8 @@ export default function Home() {
 
   const stopListening = () => {
     listeningIntentRef.current = false;
+    partialTranscriptRef.current = '';
+    finalTranscriptRef.current = '';
     if (recognitionRef.current) {
       recognitionRef.current.onend = null;
       try {
@@ -242,28 +245,37 @@ export default function Home() {
     if (!ctor) return;
     listeningIntentRef.current = true;
     recognitionErrorCountRef.current = 0;
+    finalTranscriptRef.current = '';
     const recognition = new ctor();
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
     recognition.onresult = (event) => {
       recognitionErrorCountRef.current = 0;
-      let finalText = '';
+      let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         if (event.results[i].isFinal) {
-          finalText += event.results[i][0].transcript;
+          finalTranscriptRef.current += event.results[i][0].transcript;
+        } else {
+          interim = event.results[i][0].transcript;
         }
       }
-      if (!finalText.trim()) return;
-      partialTranscriptRef.current = finalText.trim();
-      dispatch({ type: 'SPEECH_DETECTED', transcript: partialTranscriptRef.current });
+      const live = `${finalTranscriptRef.current}${interim ? ` ${interim}` : ''}`.trim();
+      if (!live) return;
+      partialTranscriptRef.current = live;
+      dispatch({ type: 'SPEECH_DETECTED', transcript: live });
       clearTimers();
       silenceTimerRef.current = window.setTimeout(() => {
         const transcript = partialTranscriptRef.current;
         partialTranscriptRef.current = '';
+        finalTranscriptRef.current = '';
         silenceTimerRef.current = null;
         dispatch({ type: 'SUBMIT_ANSWER', transcript });
       }, END_OF_TURN_SILENCE_MS);
+      idleTimerRef.current = window.setTimeout(() => {
+        idleTimerRef.current = null;
+        dispatch({ type: 'IDLE_TIMEOUT' });
+      }, IDLE_PROMPT_MS);
     };
     recognition.onend = () => {
       if (listeningIntentRef.current && !pausedRef.current) {
@@ -476,6 +488,7 @@ export default function Home() {
     pendingResumeRef.current = null;
     turnInFlightRef.current = false;
     partialTranscriptRef.current = '';
+    finalTranscriptRef.current = '';
     dispatch({ type: 'RESET' });
   };
 

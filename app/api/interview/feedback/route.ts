@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { buildFeedbackReportFallback, type Topic } from "@/lib/llm.ts";
+import { buildFeedbackReportFallback, type FeedbackReport, type Topic } from "@/lib/llm.ts";
 import { generateFeedbackReportGroq } from "@/lib/groq.ts";
 import { deriveCoveredDayIds, normalizeHistory } from "@/lib/interview.ts";
 import { getCurriculumDay } from "@/lib/retrieval.ts";
@@ -36,7 +36,13 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    const report = await generateFeedbackReportGroq(history, topics);
+    let report: FeedbackReport | null = null;
+    try {
+      report = await generateFeedbackReportGroq(history, topics);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[feedback] Groq report generation failed, using fallback: ${message}`);
+    }
     return NextResponse.json(report ?? buildFeedbackReportFallback(topics));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
