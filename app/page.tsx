@@ -30,6 +30,10 @@ type Report = {
 
 const RATE_LIMIT_MS = 7000;
 const IDLE_PROMPT_TEXT = 'Are you there? Take your time — I am still listening.';
+const AUDIO_ACTIVITY_THRESHOLD = 0.06;
+const AUDIO_ACTIVE_GRACE_MS = 1500;
+const MAX_AUDIO_ONLY_MS = 30000;
+const AUDIO_POLL_MS = 200;
 
 function stripDayTag(content: string): { day: number | null; text: string } {
   const match = /^\[D:(\d+)\]\s*/i.exec(content);
@@ -77,6 +81,14 @@ export default function Home() {
   const partialTranscriptRef = useRef('');
   const finalTranscriptRef = useRef('');
   const lastQuestionTextRef = useRef('');
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioIntervalRef = useRef<number | null>(null);
+  const audioActiveRef = useRef(false);
+  const lastAudioAtRef = useRef(0);
+  const audioActiveSinceRef = useRef(0);
   const idleTimerRef = useRef<number | null>(null);
   const silenceTimerRef = useRef<number | null>(null);
   const pendingResumeRef = useRef<'speak' | 'listen' | null>(null);
@@ -145,6 +157,124 @@ export default function Home() {
     }
   };
 
+  const readAudioLevel = () => {
+    const analyser = analyserRef.current;
+    if (!analyser) return;
+    const data = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(data);
+    let peak = 0;
+    for (let i = 0; i < data.length; i++) {
+      const dev = Math.abs(data[i] - 128) / 128;
+      if (dev > peak) peak = dev;
+    }
+    const now = Date.now();
+    const active = peak >= AUDIO_ACTIVITY_THRESHOLD;
+    if (active) {
+      if (now - lastAudioAtRef.current > AUDIO_ACTIVE_GRACE_MS) {
+        audioActiveSinceRef.current = now;
+      }
+      lastAudioAtRef.current = now;
+    }
+    audioActiveRef.current = active;
+  };
+
+  const isEffectivelyTalking = () => {
+    const now = Date.now();
+    if (now - lastAudioAtRef.current > AUDIO_ACTIVE_GRACE_MS) return false;
+    if (now - audioActiveSinceRef.current > MAX_AUDIO_ONLY_MS) return false;
+    return true;
+  };
+
+  const armIdleTimer = () => {
+    if (idleTimerRef.current !== null) return;
+    idleTimerRef.current = window.setTimeout(() => {
+      idleTimerRef.current = null;
+      if (isEffectivelyTalking()) {
+        armIdleTimer();
+        return;
+      }
+      dispatch({ type: 'IDLE_TIMEOUT' });
+    }, IDLE_PROMPT_MS);
+  };
+
+  const armSilenceTimer = () => {
+    if (silenceTimerRef.current !== null) return;
+    silenceTimerRef.current = window.setTimeout(() => {
+      silenceTimerRef.current = null;
+      if (isEffectivelyTalking()) {
+        armSilenceTimer();
+        return;
+      }
+      const transcript = partialTranscriptRef.current;
+      partialTranscriptRef.current = '';
+      finalTranscriptRef.current = '';
+      dispatch({ type: 'SUBMIT_ANSWER', transcript });
+    }, END_OF_TURN_SILENCE_MS);
+  };
+
+  const stopAudioMonitor = () => {
+    if (audioIntervalRef.current !== null) {
+      window.clearInterval(audioIntervalRef.current);
+      audioIntervalRef.current = null;
+    }
+    audioActiveRef.current = false;
+    if (analyserRef.current) {
+      try {
+        analyserRef.current.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      analyserRef.current = null;
+    }
+    if (micSourceRef.current) {
+      try {
+        micSourceRef.current.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+      micSourceRef.current = null;
+    }
+    if (micStreamRef.current) {
+      for (const track of micStreamRef.current.getTracks()) {
+        track.stop();
+      }
+      micStreamRef.current = null;
+    }
+  };
+
+  const startAudioMonitor = async () => {
+    stopAudioMonitor();
+    const w = window as unknown as {
+      AudioContext?: typeof AudioContext;
+      webkitAudioContext?: typeof AudioContext;
+    };
+    const Ctor = w.AudioContext || w.webkitAudioContext;
+    if (!Ctor || !navigator.mediaDevices?.getUserMedia) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!listeningIntentRef.current) {
+        for (const track of stream.getTracks()) track.stop();
+        return;
+      }
+      micStreamRef.current = stream;
+      const ctx = audioContextRef.current ?? new Ctor();
+      audioContextRef.current = ctx;
+      if (ctx.state === 'suspended') {
+        await ctx.resume().catch(() => undefined);
+      }
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.6;
+      source.connect(analyser);
+      micSourceRef.current = source;
+      analyserRef.current = analyser;
+      audioIntervalRef.current = window.setInterval(readAudioLevel, AUDIO_POLL_MS);
+    } catch {
+      /* audio monitoring unavailable; recognition-only timers still work */
+    }
+  };
+
   const buildApiHistory = () =>
     messagesRef.current.map((m) => ({
       role: m.role,
@@ -163,6 +293,7 @@ export default function Home() {
     listeningIntentRef.current = false;
     partialTranscriptRef.current = '';
     finalTranscriptRef.current = '';
+    stopAudioMonitor();
     if (recognitionRef.current) {
       recognitionRef.current.onend = null;
       try {
@@ -265,17 +396,9 @@ export default function Home() {
       partialTranscriptRef.current = live;
       dispatch({ type: 'SPEECH_DETECTED', transcript: live });
       clearTimers();
-      silenceTimerRef.current = window.setTimeout(() => {
-        const transcript = partialTranscriptRef.current;
-        partialTranscriptRef.current = '';
-        finalTranscriptRef.current = '';
-        silenceTimerRef.current = null;
-        dispatch({ type: 'SUBMIT_ANSWER', transcript });
-      }, END_OF_TURN_SILENCE_MS);
-      idleTimerRef.current = window.setTimeout(() => {
-        idleTimerRef.current = null;
-        dispatch({ type: 'IDLE_TIMEOUT' });
-      }, IDLE_PROMPT_MS);
+      audioActiveSinceRef.current = Date.now();
+      armSilenceTimer();
+      armIdleTimer();
     };
     recognition.onend = () => {
       if (listeningIntentRef.current && !pausedRef.current) {
@@ -294,6 +417,7 @@ export default function Home() {
       const err = e.error;
       if (err === 'not-allowed' || err === 'service-not-allowed') {
         listeningIntentRef.current = false;
+        stopAudioMonitor();
         dispatch({ type: 'FAILED', error: 'Microphone access is required. Enable it in your browser and try again.' });
         return;
       }
@@ -306,6 +430,7 @@ export default function Home() {
         return;
       }
       listeningIntentRef.current = false;
+      stopAudioMonitor();
       dispatch({
         type: 'FAILED',
         error:
@@ -321,10 +446,8 @@ export default function Home() {
       /* start() threw; onerror will surface it */
     }
     clearTimers();
-    idleTimerRef.current = window.setTimeout(() => {
-      idleTimerRef.current = null;
-      dispatch({ type: 'IDLE_TIMEOUT' });
-    }, IDLE_PROMPT_MS);
+    armIdleTimer();
+    void startAudioMonitor();
   };
 
   const handleDecision = (decision: Decision) => {
