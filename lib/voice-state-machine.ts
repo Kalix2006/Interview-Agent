@@ -8,6 +8,7 @@ export type VoicePhase =
   | 'listening'
   | 'processing'
   | 'speaking'
+  | 'ending'
   | 'complete'
   | 'error';
 
@@ -26,6 +27,8 @@ export type VoiceEvent =
   | { type: 'IDLE_TIMEOUT' }
   | { type: 'AI_SPEECH_ENDED' }
   | { type: 'TURN_RESPONSE'; hasNext: boolean; question: string }
+  | { type: 'CANCEL_END' }
+  | { type: 'END_INTERVIEW' }
   | { type: 'FAILED'; error: string }
   | { type: 'RESET' };
 
@@ -34,14 +37,16 @@ export type Decision =
   | { kind: 'speak'; text: string }
   | { kind: 'start_listening' }
   | { kind: 'prompt_idle' }
+  | { kind: 'prompt_end' }
   | { kind: 'request_turn'; transcript: string }
   | { kind: 'request_feedback' }
   | { kind: 'set_error'; message: string }
   | { kind: 'reset' };
 
-export const IDLE_PROMPT_MS = 9000;
+export const IDLE_PROMPT_MS = 10000;
 export const END_OF_TURN_SILENCE_MS = 2500;
-export const MAX_CONSECUTIVE_IDLE_PROMPTS = 2;
+export const IDLE_PROMPTS_BEFORE_END_WARNING = 1;
+export const END_WARNING_TIMEOUT_MS = 30000;
 
 export function createInitialVoiceContext(): VoiceContext {
   return {
@@ -79,10 +84,13 @@ export function reduce(
     }
 
     case 'IDLE_TIMEOUT': {
-      if (context.consecutiveIdlePrompts >= MAX_CONSECUTIVE_IDLE_PROMPTS) {
+      if (context.phase !== 'listening') {
+        return { context, decisions: [{ kind: 'noop' }] };
+      }
+      if (context.consecutiveIdlePrompts >= IDLE_PROMPTS_BEFORE_END_WARNING) {
         return {
-          context: { ...context, phase: 'processing' },
-          decisions: [{ kind: 'request_turn', transcript: '' }],
+          context: { ...context, phase: 'ending', consecutiveIdlePrompts: 0 },
+          decisions: [{ kind: 'prompt_end' }],
         };
       }
       return {
@@ -95,6 +103,26 @@ export function reduce(
       return {
         context: { ...context, phase: 'listening', consecutiveIdlePrompts: 0 },
         decisions: [{ kind: 'start_listening' }],
+      };
+    }
+
+    case 'CANCEL_END': {
+      if (context.phase !== 'ending') {
+        return { context, decisions: [{ kind: 'noop' }] };
+      }
+      return {
+        context: { ...context, phase: 'listening', consecutiveIdlePrompts: 0 },
+        decisions: [{ kind: 'start_listening' }],
+      };
+    }
+
+    case 'END_INTERVIEW': {
+      if (context.phase !== 'ending') {
+        return { context, decisions: [{ kind: 'noop' }] };
+      }
+      return {
+        context: { ...context, phase: 'complete', partialTranscript: '' },
+        decisions: [{ kind: 'request_feedback' }],
       };
     }
 

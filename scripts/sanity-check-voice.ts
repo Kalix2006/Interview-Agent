@@ -1,7 +1,9 @@
 import {
   createInitialVoiceContext,
   detectBrowserSupport,
-  MAX_CONSECUTIVE_IDLE_PROMPTS,
+  END_WARNING_TIMEOUT_MS,
+  IDLE_PROMPT_MS,
+  IDLE_PROMPTS_BEFORE_END_WARNING,
   reduce,
   type VoiceContext,
   type VoiceEvent,
@@ -75,7 +77,7 @@ check("AI_SPEECH_ENDED transitions to listening", r.context.phase === "listening
 check("AI_SPEECH_ENDED emits start_listening", hasDecision(r.decisions, "start_listening"));
 check("AI_SPEECH_ENDED resets idle counter", r.context.consecutiveIdlePrompts === 0);
 
-console.log("\n=== Voice state machine: idle prompts (2 then submit empty) ===");
+console.log("\n=== Voice state machine: idle prompts (1 prompt then end warning) ===");
 
 const idleRun = (n: number): { context: VoiceContext; decisions: string[] } =>
   run([
@@ -90,25 +92,50 @@ check("first IDLE_TIMEOUT increments counter", result.context.consecutiveIdlePro
 check("first IDLE_TIMEOUT stays in listening", result.context.phase === "listening");
 
 result = idleRun(2);
-check("second IDLE_TIMEOUT still prompts", hasKind(result.decisions, "prompt_idle"));
-check("second IDLE_TIMEOUT counter is 2", result.context.consecutiveIdlePrompts === 2);
-check("second IDLE_TIMEOUT stays in listening", result.context.phase === "listening");
+check("second IDLE_TIMEOUT transitions to ending", result.context.phase === "ending");
+check("second IDLE_TIMEOUT emits prompt_end", hasKind(result.decisions, "prompt_end"));
+check("second IDLE_TIMEOUT resets counter", result.context.consecutiveIdlePrompts === 0);
 
-result = idleRun(3);
-check("third IDLE_TIMEOUT submits an empty turn", hasKind(result.decisions, "request_turn"));
-check("third IDLE_TIMEOUT transitions to processing", result.context.phase === "processing");
+const afterEndingIdle = reduce(result.context, { type: "IDLE_TIMEOUT" });
+check("IDLE_TIMEOUT in ending is a no-op", afterEndingIdle.context.phase === "ending");
+check("IDLE_TIMEOUT in ending emits noop", hasDecision(afterEndingIdle.decisions, "noop"));
 
-console.log("\n=== Voice state machine: idle exhaustion respects MAX constant ===");
+console.log("\n=== Voice state machine: idle constants ===");
 
-check("MAX_CONSECUTIVE_IDLE_PROMPTS is 2", MAX_CONSECUTIVE_IDLE_PROMPTS === 2);
-let ctx = createInitialVoiceContext();
-ctx = reduce(ctx, { type: "START_INTERVIEW" }).context;
-ctx = reduce(ctx, { type: "AI_SPEECH_ENDED" }).context;
-ctx = reduce(ctx, { type: "IDLE_TIMEOUT" }).context;
-ctx = reduce(ctx, { type: "IDLE_TIMEOUT" }).context;
-const exhausted = reduce(ctx, { type: "IDLE_TIMEOUT" });
-check("exhaustion submits instead of prompting", hasDecision(exhausted.decisions, "request_turn"));
-check("exhaustion transitions to processing", exhausted.context.phase === "processing");
+check("IDLE_PROMPT_MS is 10000", IDLE_PROMPT_MS === 10000);
+check("IDLE_PROMPTS_BEFORE_END_WARNING is 1", IDLE_PROMPTS_BEFORE_END_WARNING === 1);
+check("END_WARNING_TIMEOUT_MS is 30000", END_WARNING_TIMEOUT_MS === 30000);
+
+console.log("\n=== Voice state machine: cancel end warning resumes interview ===");
+
+r = reduce(createInitialVoiceContext(), { type: "START_INTERVIEW" });
+r = reduce(r.context, { type: "AI_SPEECH_ENDED" });
+r = reduce(r.context, { type: "IDLE_TIMEOUT" });
+r = reduce(r.context, { type: "IDLE_TIMEOUT" });
+check("cancel requires ending phase", r.context.phase === "ending");
+r = reduce(r.context, { type: "CANCEL_END" });
+check("CANCEL_END returns to listening", r.context.phase === "listening");
+check("CANCEL_END emits start_listening", hasDecision(r.decisions, "start_listening"));
+check("CANCEL_END resets idle counter", r.context.consecutiveIdlePrompts === 0);
+
+r = reduce(r.context, { type: "CANCEL_END" });
+check("CANCEL_END outside ending is a no-op", r.context.phase === "listening");
+check("CANCEL_END outside ending emits noop", hasDecision(r.decisions, "noop"));
+
+console.log("\n=== Voice state machine: confirm end warning completes interview ===");
+
+r = reduce(createInitialVoiceContext(), { type: "START_INTERVIEW" });
+r = reduce(r.context, { type: "AI_SPEECH_ENDED" });
+r = reduce(r.context, { type: "IDLE_TIMEOUT" });
+r = reduce(r.context, { type: "IDLE_TIMEOUT" });
+check("confirm requires ending phase", r.context.phase === "ending");
+r = reduce(r.context, { type: "END_INTERVIEW" });
+check("END_INTERVIEW transitions to complete", r.context.phase === "complete");
+check("END_INTERVIEW requests feedback", hasDecision(r.decisions, "request_feedback"));
+
+r = reduce(r.context, { type: "END_INTERVIEW" });
+check("END_INTERVIEW outside ending is a no-op", r.context.phase === "complete");
+check("END_INTERVIEW outside ending emits noop", hasDecision(r.decisions, "noop"));
 
 console.log("\n=== Voice state machine: completion ===");
 

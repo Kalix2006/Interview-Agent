@@ -5,6 +5,7 @@ import {
   createInitialVoiceContext,
   detectBrowserSupport,
   END_OF_TURN_SILENCE_MS,
+  END_WARNING_TIMEOUT_MS,
   IDLE_PROMPT_MS,
   reduce,
   type Decision,
@@ -28,7 +29,7 @@ type Report = {
 };
 
 const RATE_LIMIT_MS = 7000;
-const IDLE_PROMPT_TEXT = 'Take your time. Are you still there?';
+const IDLE_PROMPT_TEXT = 'Are you there? Take your time — I am still listening.';
 
 function stripDayTag(content: string): { day: number | null; text: string } {
   const match = /^\[D:(\d+)\]\s*/i.exec(content);
@@ -62,6 +63,7 @@ export default function Home() {
   const [voiceContext, setVoiceContext] = useState<VoiceContext>(createInitialVoiceContext());
   const [paused, setPaused] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [endCountdown, setEndCountdown] = useState(0);
 
   const voiceContextRef = useRef(voiceContext);
   const messagesRef = useRef(messages);
@@ -79,6 +81,8 @@ export default function Home() {
   const pendingResumeRef = useRef<'speak' | 'listen' | null>(null);
   const recognitionCtorRef = useRef<RecognitionCtor | null>(null);
   const recognitionErrorCountRef = useRef(0);
+  const endTimerRef = useRef<number | null>(null);
+  const endCountdownRef = useRef(0);
 
   useEffect(() => {
     voiceContextRef.current = voiceContext;
@@ -108,6 +112,14 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (endTimerRef.current !== null) {
+        window.clearInterval(endTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (candidates.length === 0) {
       fetch('/api/candidates')
         .then((r) => r.json())
@@ -130,6 +142,14 @@ export default function Home() {
       window.clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
     }
+  };
+
+  const stopEndTimer = () => {
+    if (endTimerRef.current !== null) {
+      window.clearInterval(endTimerRef.current);
+      endTimerRef.current = null;
+    }
+    endCountdownRef.current = 0;
   };
 
   const stopListening = () => {
@@ -311,6 +331,24 @@ export default function Home() {
         promptThenListen();
         return;
       }
+      case 'prompt_end': {
+        stopListening();
+        clearTimers();
+        endCountdownRef.current = Math.round(END_WARNING_TIMEOUT_MS / 1000);
+        setEndCountdown(endCountdownRef.current);
+        const interval = window.setInterval(() => {
+          const next = endCountdownRef.current - 1;
+          endCountdownRef.current = next;
+          setEndCountdown(next);
+          if (next <= 0) {
+            window.clearInterval(interval);
+            endTimerRef.current = null;
+            dispatch({ type: 'END_INTERVIEW' });
+          }
+        }, 1000);
+        endTimerRef.current = interval;
+        return;
+      }
       case 'request_turn': {
         const content = decision.transcript || '[No response]';
         setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: 'candidate', content }]);
@@ -322,6 +360,8 @@ export default function Home() {
       case 'request_feedback': {
         stopListening();
         clearTimers();
+        stopEndTimer();
+        setEndCountdown(0);
         const history = messagesRef.current.map((m) => ({ role: m.role, content: m.content }));
         fetch('/api/interview/feedback', {
           method: 'POST',
@@ -399,10 +439,24 @@ export default function Home() {
     }
   };
 
+  const cancelEnd = () => {
+    stopEndTimer();
+    setEndCountdown(0);
+    dispatch({ type: 'CANCEL_END' });
+  };
+
+  const confirmEnd = () => {
+    stopEndTimer();
+    setEndCountdown(0);
+    dispatch({ type: 'END_INTERVIEW' });
+  };
+
   const resetInterview = () => {
     window.speechSynthesis.cancel();
     stopListening();
     clearTimers();
+    stopEndTimer();
+    setEndCountdown(0);
     setPaused(false);
     setMuted(false);
     pendingResumeRef.current = null;
@@ -425,6 +479,7 @@ export default function Home() {
     listening: 'Listening',
     processing: 'Thinking',
     speaking: 'Your turn',
+    ending: 'Ending?',
     complete: 'Complete',
     error: 'Error',
   };
@@ -434,6 +489,7 @@ export default function Home() {
     listening: 'state-indicator--listening',
     processing: 'state-indicator--thinking',
     speaking: 'state-indicator--speaking',
+    ending: 'state-indicator--idle',
     complete: 'state-indicator--idle',
     error: 'state-indicator--idle',
   };
@@ -598,6 +654,29 @@ export default function Home() {
                         ))}
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {phase === 'ending' && (
+                <div className="end-warning" role="dialog" aria-modal="false" aria-label="End interview warning">
+                  <div className="end-warning__card">
+                    <h2 className="end-warning__title">End the interview?</h2>
+                    <p className="end-warning__body">
+                      You&apos;ve been quiet for a while. If you don&apos;t respond within {endCountdown} seconds, the
+                      interview will end automatically.
+                    </p>
+                    <div className="end-warning__countdown" role="timer" aria-live="polite">
+                      {endCountdown}s
+                    </div>
+                    <div className="end-warning__actions">
+                      <button type="button" className="btn btn--primary" onClick={cancelEnd}>
+                        Cancel — continue interview
+                      </button>
+                      <button type="button" className="btn btn--ghost" onClick={confirmEnd}>
+                        End interview
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
