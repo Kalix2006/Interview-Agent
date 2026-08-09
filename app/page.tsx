@@ -78,6 +78,7 @@ export default function Home() {
   const silenceTimerRef = useRef<number | null>(null);
   const pendingResumeRef = useRef<'speak' | 'listen' | null>(null);
   const recognitionCtorRef = useRef<RecognitionCtor | null>(null);
+  const recognitionErrorCountRef = useRef(0);
 
   useEffect(() => {
     voiceContextRef.current = voiceContext;
@@ -210,11 +211,13 @@ export default function Home() {
     const ctor = recognitionCtorRef.current;
     if (!ctor) return;
     listeningIntentRef.current = true;
+    recognitionErrorCountRef.current = 0;
     const recognition = new ctor();
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
     recognition.onresult = (event) => {
+      recognitionErrorCountRef.current = 0;
       let finalText = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
         if (event.results[i].isFinal) {
@@ -234,19 +237,40 @@ export default function Home() {
     };
     recognition.onend = () => {
       if (listeningIntentRef.current && !pausedRef.current) {
-        try {
-          recognition.start();
-        } catch {
-          /* recognition still starting */
-        }
+        window.setTimeout(() => {
+          if (listeningIntentRef.current && !pausedRef.current) {
+            try {
+              recognition.start();
+            } catch {
+              /* recognition still starting */
+            }
+          }
+        }, 500);
       }
     };
     recognition.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      const err = e.error;
+      if (err === 'not-allowed' || err === 'service-not-allowed') {
+        listeningIntentRef.current = false;
         dispatch({ type: 'FAILED', error: 'Microphone access is required. Enable it in your browser and try again.' });
-      } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
-        console.error('Speech recognition error:', e.error);
+        return;
       }
+      if (err === 'no-speech' || err === 'aborted') {
+        return;
+      }
+      recognitionErrorCountRef.current += 1;
+      if (err === 'network' && recognitionErrorCountRef.current < 3) {
+        console.warn('Speech recognition network hiccup, retrying:', err);
+        return;
+      }
+      listeningIntentRef.current = false;
+      dispatch({
+        type: 'FAILED',
+        error:
+          err === 'network'
+            ? 'Voice recognition service is unreachable. Check your internet connection and try again.'
+            : `Speech recognition failed (${err}). Try again.`,
+      });
     };
     recognitionRef.current = recognition;
     try {
